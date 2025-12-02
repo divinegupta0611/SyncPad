@@ -128,7 +128,6 @@
 
 ### Database & Auth
 - **Supabase** - Authentication and user management
-- **PostgreSQL** (via Supabase) - User data storage
 
 ### Development Tools
 - **npm** - Package management
