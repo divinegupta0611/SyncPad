@@ -6,7 +6,6 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// Configure CORS for both Express and Socket.IO
 const corsOptions = {
   origin: ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"],
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -14,37 +13,30 @@ const corsOptions = {
   allowedHeaders: ["Content-Type", "Authorization"]
 };
 
-// Apply CORS middleware BEFORE other middleware
 app.use(cors(corsOptions));
-
-// Add explicit OPTIONS handler for preflight requests
 app.options('*', cors(corsOptions));
-
-// Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Add request logging middleware
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path} - ${new Date().toISOString()}`);
-  console.log('Request body:', req.body);
   next();
 });
 
 const io = socketIo(server, {
-  cors: corsOptions
+  cors: corsOptions,
+  pingInterval: 10000,
+  pingTimeout: 5000,
+  transports: ['websocket', 'polling']
 });
 
-// Store active rooms and their data
 const rooms = new Map();
-const activeUsers = new Map(); // socketId -> { userId, username, roomId, cursor }
+const activeUsers = new Map();
 
-// Generate unique room ID
 function generateRoomId() {
   return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 }
 
-// Generate random colors for users
 const userColors = [
   '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', 
   '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9'
@@ -54,7 +46,6 @@ function getRandomColor() {
   return userColors[Math.floor(Math.random() * userColors.length)];
 }
 
-// Health check endpoint (add this first)
 app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
@@ -64,26 +55,21 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Add a test endpoint
 app.get('/api/test', (req, res) => {
   console.log('Test endpoint hit');
   res.json({ message: 'API is working', timestamp: new Date().toISOString() });
 });
 
-// Room management endpoints
 app.post('/api/rooms/create', (req, res) => {
   try {
     console.log('=== ROOM CREATE REQUEST ===');
-    console.log('Request method:', req.method);
-    console.log('Request URL:', req.url);
-    console.log('Request headers:', req.headers);
-    console.log('Request body:', req.body);
     
     const roomId = generateRoomId();
     const room = {
       id: roomId,
       name: req.body.name || `Room ${roomId}`,
       shapes: [],
+      backgroundColor: '#ffffff',
       users: [],
       createdAt: new Date(),
       lastActivity: new Date()
@@ -91,16 +77,12 @@ app.post('/api/rooms/create', (req, res) => {
     
     rooms.set(roomId, room);
     
-    console.log(`Room created: ${roomId} with name: ${room.name}`);
-    console.log(`RoomId: ${roomId}`);
-    const response = { 
+    console.log(`Room created: ${roomId}`);
+    res.status(201).json({ 
       roomId: roomId, 
       room: room,
       message: 'Room created successfully'
-    };
-    
-    console.log('Sending response:', response);
-    res.status(201).json(response);
+    });
     
   } catch (error) {
     console.error('Error creating room:', error);
@@ -139,7 +121,6 @@ app.get('/api/rooms', (req, res) => {
   }
 });
 
-// Debug endpoint
 app.get('/api', (req, res) => {
   res.json({ 
     message: 'API root endpoint hit', 
@@ -153,14 +134,16 @@ app.get('/api', (req, res) => {
     totalUsers: activeUsers.size
   });
 });
-// Socket.IO connection handling
+
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
-  // Join a room
+  const connectionTime = Date.now();
+
   socket.on('join-room', (data) => {
     try {
       const { roomId, username } = data;
-      console.log(`Join room request: ${username} -> ${roomId}`);
+      const requestTime = Date.now();
+      console.log(`Join room request: ${username} -> ${roomId} at ${requestTime}`);
       
       if (!roomId || !username) {
         console.log('Missing roomId or username');
@@ -175,8 +158,6 @@ io.on('connection', (socket) => {
       }
 
       const room = rooms.get(roomId);
-      
-      // Check if user is already in room (reconnection)
       const existingUserIndex = room.users.findIndex(u => u.id === socket.id);
       
       const user = {
@@ -189,16 +170,13 @@ io.on('connection', (socket) => {
       };
 
       if (existingUserIndex !== -1) {
-        // Update existing user
         room.users[existingUserIndex] = user;
       } else {
-        // Add new user to room
         room.users.push(user);
       }
       
       room.lastActivity = new Date();
       
-      // Store user info
       activeUsers.set(socket.id, {
         userId: socket.id,
         username: user.username,
@@ -207,33 +185,36 @@ io.on('connection', (socket) => {
         color: user.color
       });
 
-      // Join socket room
       socket.join(roomId);
 
-      // Send current room state to the new user
+      const responseTime = Date.now();
+      const latency = responseTime - requestTime;
+      console.log(`Room join latency: ${latency}ms`);
+
       socket.emit('room-joined', {
         room: room,
         userId: socket.id,
         shapes: room.shapes,
-        users: room.users
+        backgroundColor: room.backgroundColor || '#ffffff',
+        users: room.users,
+        latency: latency
       });
 
-      // Notify other users in the room
       socket.to(roomId).emit('user-joined', {
         user: user,
         totalUsers: room.users.length
       });
 
-      console.log(`User ${user.username} successfully joined room ${roomId}`);
+      console.log(`User ${user.username} joined room ${roomId} (${latency}ms)`);
     } catch (error) {
       console.error('Error joining room:', error);
       socket.emit('error', 'Failed to join room');
     }
   });
 
-  // Handle shape updates
   socket.on('shape-added', (data) => {
     try {
+      const startTime = Date.now();
       const user = activeUsers.get(socket.id);
       if (!user) return;
 
@@ -249,11 +230,13 @@ io.on('connection', (socket) => {
       room.shapes.push(shapeWithUser);
       room.lastActivity = new Date();
 
-      // Broadcast to all users in the room except sender
       socket.to(user.roomId).emit('shape-added', {
         shape: shapeWithUser,
         userId: user.userId
       });
+
+      const endTime = Date.now();
+      console.log(`Shape added broadcast: ${endTime - startTime}ms`);
     } catch (error) {
       console.error('Error handling shape-added:', error);
     }
@@ -261,13 +244,13 @@ io.on('connection', (socket) => {
 
   socket.on('shape-updated', (data) => {
     try {
+      const startTime = Date.now();
       const user = activeUsers.get(socket.id);
       if (!user) return;
 
       const room = rooms.get(user.roomId);
       if (!room) return;
 
-      // Find and update the shape
       const shapeIndex = room.shapes.findIndex(shape => shape.id === data.shape.id);
       if (shapeIndex !== -1) {
         room.shapes[shapeIndex] = {
@@ -276,12 +259,14 @@ io.on('connection', (socket) => {
           lastModifiedAt: new Date()
         };
         room.lastActivity = new Date();
-        console.log(`Shape Updated by ${user.username}`);
-        // Broadcast to all users in the room except sender
+
         socket.to(user.roomId).emit('shape-updated', {
           shape: room.shapes[shapeIndex],
           userId: user.userId
         });
+
+        const endTime = Date.now();
+        console.log(`Shape updated broadcast: ${endTime - startTime}ms`);
       }
     } catch (error) {
       console.error('Error handling shape-updated:', error);
@@ -290,6 +275,7 @@ io.on('connection', (socket) => {
 
   socket.on('shape-deleted', (data) => {
     try {
+      const startTime = Date.now();
       const user = activeUsers.get(socket.id);
       if (!user) return;
 
@@ -299,11 +285,13 @@ io.on('connection', (socket) => {
       room.shapes = room.shapes.filter(shape => shape.id !== data.shapeId);
       room.lastActivity = new Date();
 
-      // Broadcast to all users in the room except sender
       socket.to(user.roomId).emit('shape-deleted', {
         shapeId: data.shapeId,
         userId: user.userId
       });
+
+      const endTime = Date.now();
+      console.log(`Shape deleted broadcast: ${endTime - startTime}ms`);
     } catch (error) {
       console.error('Error handling shape-deleted:', error);
     }
@@ -311,6 +299,7 @@ io.on('connection', (socket) => {
 
   socket.on('canvas-cleared', () => {
     try {
+      const startTime = Date.now();
       const user = activeUsers.get(socket.id);
       if (!user) return;
 
@@ -320,17 +309,38 @@ io.on('connection', (socket) => {
       room.shapes = [];
       room.lastActivity = new Date();
 
-      // Broadcast to all users in the room except sender
       socket.to(user.roomId).emit('canvas-cleared', {
         userId: user.userId,
         clearedBy: user.username
       });
+
+      const endTime = Date.now();
+      console.log(`Canvas cleared broadcast: ${endTime - startTime}ms`);
     } catch (error) {
       console.error('Error handling canvas-cleared:', error);
     }
   });
+  socket.on('background-changed', (data) => {
+  try {
+    const user = activeUsers.get(socket.id);
+    if (!user) return;
 
-  // Handle cursor movement
+    const room = rooms.get(user.roomId);
+    if (!room) return;
+
+    room.backgroundColor = data.color;
+    room.lastActivity = new Date();
+
+    socket.to(user.roomId).emit('background-changed', {
+      color: data.color,
+      userId: user.userId
+    });
+
+    console.log(`Background changed to ${data.color} in room ${user.roomId}`);
+  } catch (error) {
+    console.error('Error handling background-changed:', error);
+  }
+});
   socket.on('cursor-move', (data) => {
     try {
       const user = activeUsers.get(socket.id);
@@ -338,7 +348,6 @@ io.on('connection', (socket) => {
 
       user.cursor = data.cursor;
       
-      // Broadcast cursor position to other users in the room
       socket.to(user.roomId).emit('cursor-move', {
         userId: user.userId,
         username: user.username,
@@ -350,7 +359,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle drawing in progress (for pen tool)
   socket.on('drawing-start', (data) => {
     try {
       const user = activeUsers.get(socket.id);
@@ -394,7 +402,6 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle user tool change
   socket.on('tool-changed', (data) => {
     try {
       const user = activeUsers.get(socket.id);
@@ -410,26 +417,23 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle disconnect
   socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+    const disconnectTime = Date.now();
+    console.log('User disconnected:', socket.id, 'at', disconnectTime);
     try {
       const user = activeUsers.get(socket.id);
       if (user) {
         const room = rooms.get(user.roomId);
         if (room) {
-          // Remove user from room
           room.users = room.users.filter(u => u.id !== socket.id);
           room.lastActivity = new Date();
 
-          // Notify other users in the room
           socket.to(user.roomId).emit('user-left', {
             userId: socket.id,
             username: user.username,
             totalUsers: room.users.length
           });
 
-          // Clean up empty rooms after 24 hours of inactivity
           if (room.users.length === 0) {
             setTimeout(() => {
               const currentRoom = rooms.get(user.roomId);
@@ -437,7 +441,7 @@ io.on('connection', (socket) => {
                 rooms.delete(user.roomId);
                 console.log(`Cleaned up empty room: ${user.roomId}`);
               }
-            }, 24 * 60 * 60 * 1000); // 24 hours
+            }, 24 * 60 * 60 * 1000);
           }
         }
         
@@ -448,29 +452,25 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle ping for connection status
   socket.on('ping', () => {
     socket.emit('pong');
   });
 });
 
-// Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Express error:', error);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// 404 handler
 app.use((req, res) => {
   console.log(`404 - Route not found: ${req.method} ${req.path}`);
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Cleanup old rooms periodically (every hour)
 setInterval(() => {
   try {
     const now = new Date();
-    const maxAge = 48 * 60 * 60 * 1000; // 48 hours
+    const maxAge = 48 * 60 * 60 * 1000;
     
     for (const [roomId, room] of rooms.entries()) {
       if (room.users.length === 0 && (now - room.lastActivity) > maxAge) {
@@ -481,7 +481,7 @@ setInterval(() => {
   } catch (error) {
     console.error('Error during room cleanup:', error);
   }
-}, 60 * 60 * 1000); // Run every hour
+}, 60 * 60 * 1000);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
@@ -490,7 +490,6 @@ server.listen(PORT, () => {
   console.log(`API endpoints available at http://localhost:${PORT}/api`);
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('SIGTERM received, shutting down gracefully');
   server.close(() => {
