@@ -277,21 +277,6 @@ const Room = () => {
             <span className="status-label">Server:</span> {API_BASE_URL}
           </p>
         </div>
-
-        <div className="debug-section">
-          <p className="debug-title">Debug Actions:</p>
-          <div className="debug-buttons">
-            <button onClick={testConnection} className="btn-debug">
-              Test API Connection
-            </button>
-            <button 
-              onClick={() => window.open(`${API_BASE_URL}/api`, '_blank')}
-              className="btn-debug"
-            >
-              Open API in Browser
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );
