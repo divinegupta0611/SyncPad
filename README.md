@@ -17,8 +17,8 @@
 
 ---
 
-## Deployed Project Link:
-sync-pad-frontend-silk.vercel.app
+## Live Demo
+Check out the live demo: [SyncPad — Live Demo](https://sync-pad-frontend-silk.vercel.app)
 
 ---
 
