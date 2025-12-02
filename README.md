@@ -17,7 +17,8 @@
 
 ---
 
-## Deployed Project Link - 
+## Deployed Project Link:
+sync-pad-frontend-silk.vercel.app
 
 ---
 
